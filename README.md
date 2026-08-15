@@ -1,2 +1,2 @@
-# Ultimate-tic-tak-toe-311
+index.html
 An advanced tictak toe game 
