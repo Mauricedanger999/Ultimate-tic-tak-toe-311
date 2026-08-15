@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ultimate Territory Tic-Tac-Toe</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0e1219;color:#fff;font-family:Arial,sans-serif;text-align:center}
+.app{max-width:760px;margin:auto;padding:14px 10px 28px}
+h1{font-size:clamp(24px,7vw,38px);margin:5px}
+.sub,.note{color:#aeb7c6;font-size:13px;line-height:1.45}
+.online{padding:12px;border:1px solid #3b4558;border-radius:12px;margin:10px 0}
+.controls{display:flex;justify-content:center;gap:7px;flex-wrap:wrap;margin:9px 0}
+button,input{border:0;border-radius:8px;padding:10px 13px;font-weight:700}
+button{background:#303949;color:#fff;cursor:pointer}
+button:hover{background:#465268}
+input{background:#181e28;color:#fff;border:1px solid #566177;width:240px}
+#status{font-size:19px;font-weight:800;margin:8px}
+#target{color:#ffd45a;font-weight:800;min-height:22px}
+#winner{font-size:25px;font-weight:900;margin:8px}
+.board{width:min(94vw,700px);aspect-ratio:1;margin:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:5px;background:#cbd1dc;padding:5px;border-radius:12px}
+.mini{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:2px;padding:3px;background:#222835;border:2px solid #4b5568;border-radius:7px}
+.mini.target{outline:3px solid #ffd45a;outline-offset:-3px}
+.mini.ownerO{border-color:#35baff}.mini.ownerX{border-color:#ff6475}
+.cell{min-width:0;min-height:0;background:#151923;border:0;border-radius:3px;color:#fff;font-size:clamp(18px,6vw,40px);font-weight:900}
+.cell:not(:disabled){cursor:pointer}.cell:not(:disabled):hover{background:#303746}
+.O{color:#35baff}.X{color:#ff6475}
+.badge{position:absolute;right:3px;top:2px;font-size:9px;opacity:.8;pointer-events:none}
+.line{position:absolute;left:8%;width:84%;top:50%;height:5px;border-radius:5px;pointer-events:none}
+.line.O{background:#35baff}.line.X{background:#ff6475}
+#fx{position:fixed;inset:0;pointer-events:none;z-index:100}
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div class="app">
+<h1>Ultimate Territory Tic-Tac-Toe</h1>
+<p class="sub">Claimed territory stays owned, but it remains playable. Every move still sends the opponent to the corresponding small grid.</p>
+
+<div class="online">
+<b>🌍 Online 2-Player</b>
+<div class="controls">
+<button onclick="createRoom()">Create Room</button>
+<input id="roomCode" placeholder="Paste room code">
+<button onclick="joinRoom()">Join Room</button>
+</div>
+<div id="connection">Local game</div>
+</div>
+
+<div id="status"></div><div id="target"></div><div id="winner"></div>
+<div id="board" class="board"></div>
+<div class="controls"><button onclick="resetGame(true)">New Game</button></div>
+<p class="note"><b>Online note:</b> Internet multiplayer needs the page hosted on HTTPS. The room code is used to connect the two browsers.</p>
+</div>
+
+<script>
+const WIN=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+let S, peer=null, conn=null, online=false, me=null;
+
+function resetGame(send=false){
+ S={cells:Array.from({length:9},()=>Array(9).fill("")),
+    owner:Array(9).fill(""),turn:"O",target:null,over:false};
+ document.getElementById("winner").textContent="";
+ render();
+ if(send && conn && conn.open) sendState();
+}
+function winningLine(a,p){return WIN.find(w=>w.every(i=>a[i]===p))||null}
+function bigWinner(p){return WIN.some(w=>w.every(i=>S.owner[i]===p))}
+function sendState(){conn.send({type:"state",state:S})}
+
+function move(g,p){
+ if(S.over || S.cells[g][p] || (S.target!==null && S.target!==g)) return;
+ if(online && S.turn!==me) return;
+
+ const player=S.turn;
+ S.cells[g][p]=player;
+
+ // Only an unclaimed small grid can be claimed.
+ // A claimed grid remains playable forever.
+ if(!S.owner[g] && winningLine(S.cells[g],player))
+   S.owner[g]=player;
+
+ // The played position ALWAYS determines the destination grid.
+ S.target=p;
+
+ if(bigWinner(player)){
+   S.over=true;
+   render();
+   victory(player);
+ } else {
+   S.turn=player==="O"?"X":"O";
+   render();
+ }
+
+ if(online && conn && conn.open) sendState();
+}
+
+function render(){
+ const board=document.getElementById("board");
+ board.innerHTML="";
+
+ for(let g=0;g<9;g++){
+   const mini=document.createElement("div");
+   mini.className="mini";
+   if(S.target===g&&!S.over) mini.classList.add("target");
+   if(S.owner[g]) mini.classList.add("owner"+S.owner[g]);
+
+   for(let p=0;p<9;p++){
+     const b=document.createElement("button");
+     b.className="cell";
+     if(S.cells[g][p]) b.classList.add(S.cells[g][p]);
+     b.textContent=S.cells[g][p];
+     b.disabled=S.over||!!S.cells[g][p]||
+       (S.target!==null&&S.target!==g)||
+       (online&&S.turn!==me);
+     b.onclick=()=>move(g,p);
+     mini.appendChild(b);
+   }
+
+   if(S.owner[g]){
+     const badge=document.createElement("div");
+     badge.className="badge "+S.owner[g];
+     badge.textContent="OWNER "+S.owner[g];
+     mini.appendChild(badge);
+
+     const l=winningLine(S.cells[g],S.owner[g]);
+     if(l){
+       const z=document.createElement("div");
+       z.className="line "+S.owner[g];
+       if(l[0]===0&&l[1]===4&&l[2]===8) z.style.transform="rotate(45deg)";
+       else if(l[0]===2&&l[1]===4&&l[2]===6) z.style.transform="rotate(-45deg)";
+       else if((l[0]===0&&l[1]===3&&l[2]===6)||
+               (l[0]===1&&l[1]===4&&l[2]===7)||
+               (l[0]===2&&l[1]===5&&l[2]===8))
+         z.style.transform="rotate(90deg)";
+       mini.appendChild(z);
+     }
+   }
+   board.appendChild(mini);
+ }
+
+ if(S.over){
+   document.getElementById("status").textContent="Game over";
+   document.getElementById("target").textContent="";
+ }else{
+   document.getElementById("status").innerHTML=
+     `Turn: <span class="${S.turn}">${S.turn}</span>`+
+     (online?(S.turn===me?" — Your move":" — Opponent's move"):"");
+   document.getElementById("target").textContent=
+     S.target===null?"First move: O may play anywhere.":
+     `Next player must play in small grid ${S.target+1}.`;
+ }
+}
+
+function victory(player){
+ document.getElementById("winner").textContent=player+" WINS! 🎉";
+ confetti();
+ trumpet();
+}
+
+function confetti(){
+ const c=document.getElementById("fx"),ctx=c.getContext("2d");
+ c.width=innerWidth;c.height=innerHeight;
+ const pieces=Array.from({length:220},()=>({
+   x:innerWidth/2+(Math.random()-.5)*180,y:innerHeight*.22,
+   vx:(Math.random()-.5)*12,vy:-Math.random()*11-3,
+   r:2+Math.random()*5,life:120+Math.random()*80,h:Math.random()*360
+ }));
+ function frame(){
+   ctx.clearRect(0,0,c.width,c.height);let live=false;
+   pieces.forEach(q=>{
+     if(q.life<=0)return;
+     live=true;q.x+=q.vx;q.vy+=.22;q.y+=q.vy;q.life--;
+     ctx.save();ctx.translate(q.x,q.y);ctx.rotate(q.life*.08);
+     ctx.fillStyle=`hsl(${q.h},90%,60%)`;
+     ctx.fillRect(-q.r,-q.r,q.r*2,q.r*2);ctx.restore();
+   });
+   if(live) requestAnimationFrame(frame);
+ }
+ frame();
+}
+
+function trumpet(){
+ try{
+   const A=new(window.AudioContext||window.webkitAudioContext)();
+   const o=A.createOscillator(),gain=A.createGain();
+   o.type="sawtooth";o.connect(gain);gain.connect(A.destination);
+   gain.gain.setValueAtTime(.0001,A.currentTime);
+   [392,494,587,784,988,784].forEach((n,i)=>{
+     const t=A.currentTime+i*.14;
+     o.frequency.setValueAtTime(n,t);
+     gain.gain.exponentialRampToValueAtTime(.14,t+.025);
+     gain.gain.exponentialRampToValueAtTime(.0001,t+.12);
+   });
+   o.start();o.stop(A.currentTime+.9);
+ }catch(e){}
+}
+
+/*
+  Online mode:
+  This version uses WebRTC through PeerJS. PeerJS supplies the signalling
+  needed to establish the browser-to-browser connection; moves are then
+  sent directly between the two connected browsers.
+*/
+function loadPeerJS(callback){
+ if(window.Peer){callback();return}
+ const s=document.createElement("script");
+ s.src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js";
+ s.onload=callback;
+ s.onerror=()=>alert("Could not load the online connection library. Check your internet connection.");
+ document.head.appendChild(s);
+}
+
+function createRoom(){
+ loadPeerJS(()=>{
+   if(peer)peer.destroy();
+   online=true;me="O";peer=new Peer();
+   peer.on("open",id=>{
+     document.getElementById("roomCode").value=id;
+     document.getElementById("connection").textContent=
+       "Room code: "+id+" — send it to your opponent.";
+   });
+   peer.on("connection",c=>{
+     conn=c;setupConnection(true);
+   });
+   peer.on("error",e=>{
+     document.getElementById("connection").textContent="Connection error: "+e.type;
+   });
+ });
+}
+
+function joinRoom(){
+ const id=document.getElementById("roomCode").value.trim();
+ if(!id){alert("Enter a room code first.");return}
+ loadPeerJS(()=>{
+   if(peer)peer.destroy();
+   online=true;me="X";peer=new Peer();
+   peer.on("open",()=>{
+     conn=peer.connect(id);
+     setupConnection(false);
+   });
+   peer.on("error",e=>{
+     document.getElementById("connection").textContent="Connection error: "+e.type;
+   });
+ });
+}
+
+function setupConnection(host){
+ conn.on("open",()=>{
+   document.getElementById("connection").textContent=
+     host?"Opponent connected — you are O":"Connected — you are X";
+   if(host){
+     resetGame(false);
+     sendState();
+   }
+ });
+ conn.on("data",msg=>{
+   if(msg.type==="state"){
+     S=msg.state;
+     render();
+     if(S.over) victory(S.turn);
+   }
+ });
+ conn.on("close",()=>{
+   document.getElementById("connection").textContent="Opponent disconnected.";
+ });
+}
+
+resetGame(false);
+</script>
+</body>
+</html>
